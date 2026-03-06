@@ -14,9 +14,8 @@ import (
 
 const (
 	retries        = 3
-	timeout        = 2000 // ms
-	retriesTimeout = 1000 // ms
-	clientTimeout  = 8000 * time.Millisecond
+	retriesTimeout = 500 * time.Millisecond // ms
+	clientTimeout  = 8 * time.Second        //ms
 )
 
 var ErrNoReplica = errors.New("no replica responded in time")
@@ -28,11 +27,16 @@ type ReqErr struct {
 
 type InMemory struct {
 	replicas map[string]string
-	client   *http.Client
+	client   DBConn
 }
 
-func NewInMemory(replicas map[string]string) *InMemory {
-	return &InMemory{replicas: replicas, client: &http.Client{Timeout: clientTimeout * time.Millisecond}}
+//go:generate minimock -i DBConn
+type DBConn interface {
+	Do(req *http.Request) (*http.Response, error)
+}
+
+func NewInMemory(conn DBConn, replicas map[string]string) *InMemory {
+	return &InMemory{replicas: replicas, client: conn}
 }
 
 /*
@@ -45,11 +49,11 @@ func (in *InMemory) QueryGet(ctx context.Context, url string) (*models.Document,
 		return nil, ErrNoReplica
 	}
 
-	saveCtx, cancel := context.WithTimeout(ctx, timeout*time.Millisecond)
+	saveCtx, cancel := context.WithTimeout(ctx, clientTimeout)
 	defer cancel()
 
 	treads := len(in.replicas)
-	ch := make(chan *models.Document, treads)
+	resultCh := make(chan *models.Document)
 	errCh := make(chan ReqErr, treads)
 
 	var wg sync.WaitGroup
@@ -60,6 +64,7 @@ func (in *InMemory) QueryGet(ctx context.Context, url string) (*models.Document,
 			defer wg.Done()
 			select {
 			case <-saveCtx.Done():
+				// контекст истек, shutdown
 				return
 			default:
 				query := fmt.Sprintf("%s/%s", addr, url)
@@ -74,7 +79,7 @@ func (in *InMemory) QueryGet(ctx context.Context, url string) (*models.Document,
 					return
 				}
 				if doc != nil {
-					ch <- doc
+					resultCh <- doc
 				}
 			}
 		}(addr)
@@ -82,16 +87,16 @@ func (in *InMemory) QueryGet(ctx context.Context, url string) (*models.Document,
 
 	go func() {
 		wg.Wait()
-		close(ch)
+		close(resultCh)
 		close(errCh)
 	}()
 
 	var errs []error
-	for ch != nil || errCh != nil {
+	for resultCh != nil || errCh != nil {
 		select {
-		case doc, ok := <-ch:
+		case doc, ok := <-resultCh:
 			if !ok {
-				ch = nil
+				resultCh = nil
 			} else {
 				cancel()
 				return doc, nil
@@ -122,7 +127,7 @@ func (in *InMemory) QuerySet(ctx context.Context, doc *models.Document) error {
 		return errors.New("url cannot be empty")
 	}
 
-	setCtx, cancel := context.WithTimeout(ctx, timeout*time.Millisecond)
+	setCtx, cancel := context.WithTimeout(ctx, clientTimeout)
 	defer cancel()
 
 	master, ok := in.replicas[doc.Url]
@@ -155,7 +160,7 @@ func (in *InMemory) doSetQueryWithRetries(ctx context.Context, query string, bod
 			lastErr = fmt.Errorf("request failed: %w", err)
 
 			if i < retries {
-				if err := sleepWithContext(ctx, retriesTimeout*time.Millisecond); err != nil {
+				if err := sleepWithContext(ctx, retriesTimeout); err != nil {
 					return err
 				}
 				continue
@@ -170,7 +175,7 @@ func (in *InMemory) doSetQueryWithRetries(ctx context.Context, query string, bod
 			lastErr = fmt.Errorf("temporary error status: %d", resp.StatusCode)
 
 			if i < retries {
-				if err := sleepWithContext(ctx, retriesTimeout*time.Millisecond); err != nil {
+				if err := sleepWithContext(ctx, retriesTimeout); err != nil {
 					return err
 				}
 				continue
@@ -202,7 +207,7 @@ func (in *InMemory) doGetQueryWithRetries(ctx context.Context, req *http.Request
 			if resp.StatusCode >= 500 || resp.StatusCode == 429 {
 				resp.Body.Close()
 				if i < retries {
-					if err := sleepWithContext(ctx, retriesTimeout*time.Millisecond); err != nil {
+					if err := sleepWithContext(ctx, retriesTimeout); err != nil {
 						return nil, err
 					}
 					continue
@@ -218,7 +223,7 @@ func (in *InMemory) doGetQueryWithRetries(ctx context.Context, req *http.Request
 		}
 
 		if i < retries {
-			if err := sleepWithContext(ctx, retriesTimeout*time.Millisecond); err != nil {
+			if err := sleepWithContext(ctx, retriesTimeout); err != nil {
 				return nil, err
 			}
 			continue
