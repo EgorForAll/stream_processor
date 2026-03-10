@@ -103,8 +103,21 @@ func (s *Service) Process(ctx context.Context, doc *dto.Document) (*dto.Document
 
 		return &updatedDoc, nil
 	}
+	
+	// Если FetchTime нового документа меньше, чем у существующего
+	updatedDoc := dto.NewDocumentBuilder().
+		SetUrl(existing.Url).
+		SetText(existing.Text).
+		SetPubDate(doc.PubDate).
+		SetFetchTime(existing.FetchTime).
+		SetFirstFetchTime(doc.FetchTime).
+		Build()
 
-	return nil, nil
+	if err := s.repo.Save(ctx, updatedDoc); err != nil {
+		return nil, fmt.Errorf("repo save: %w", err)
+	}
+
+	return &updatedDoc, nil
 }
 
 // Данный код будет работать в сервисе, читающим входные сообщения из очереди сообщений (Kafka или подобное),

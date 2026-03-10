@@ -6,21 +6,21 @@ import (
 	"testing"
 
 	"stream_processor/internal/domain/dto"
+	customerr "stream_processor/internal/infra/customerr"
 	"stream_processor/internal/infra/mocks"
 	"stream_processor/internal/infra/utils"
-	customerr "stream_processor/internal/infra/customerr"
 )
 
 func TestService_Process(t *testing.T) {
 	ctx := context.Background()
 
 	tests := []struct {
-		name        string
-		inDoc       *dto.Document
-		setupMock   func(m *mocks.MockRepo)
-		wantDoc     *dto.Document
-		wantErr     bool
-		errContains string
+		name          string
+		inDoc         *dto.Document
+		setupMock     func(m *mocks.MockRepo)
+		wantDoc       *dto.Document
+		wantErr       bool
+		errContains   string
 		wantGetCalls  int
 		wantSaveCalls int
 	}{
@@ -148,10 +148,10 @@ func TestService_Process(t *testing.T) {
 				}
 			},
 			wantDoc: &dto.Document{
-				Url:       "https://example.com",
-				Text:      "v2",
-				PubDate:   10,
-				FetchTime: 200,
+				Url:            "https://example.com",
+				Text:           "v2",
+				PubDate:        10,
+				FetchTime:      200,
 				FirstFetchTime: 100,
 			},
 			wantErr:       false,
@@ -159,7 +159,7 @@ func TestService_Process(t *testing.T) {
 			wantSaveCalls: 1,
 		},
 		{
-			name: "ok - older document than existing -> ignored",
+			name: "ok - older document than existing",
 			inDoc: &dto.Document{
 				Url:       "https://example.com",
 				Text:      "old",
@@ -177,14 +177,34 @@ func TestService_Process(t *testing.T) {
 					}, nil
 				}
 				m.SaveFn = func(ctx context.Context, d dto.Document) error {
-					t.Fatal("Save should not be called for older document")
+					if d.Url != "https://example.com" {
+						t.Errorf("unexpected Url: %s", d.Url)
+					}
+					if d.Text != "v2" {
+						t.Errorf("unexpected Text: %s", d.Text)
+					}
+					if d.PubDate != 5 {
+						t.Errorf("unexpected PubDate: %d", d.PubDate)
+					}
+					if d.FetchTime != 200 {
+						t.Errorf("unexpected FetchTime: %d", d.FetchTime)
+					}
+					if d.FirstFetchTime != 50 {
+						t.Errorf("unexpected FirstFetchTime: %d", d.FirstFetchTime)
+					}
 					return nil
 				}
 			},
-			wantDoc:       nil,
+			wantDoc: &dto.Document{
+				Url:            "https://example.com",
+				Text:           "v2",
+				PubDate:        5,
+				FetchTime:      200,
+				FirstFetchTime: 50,
+			},
 			wantErr:       false,
 			wantGetCalls:  1,
-			wantSaveCalls: 0,
+			wantSaveCalls: 1,
 		},
 		{
 			name: "error - repo Get returns unexpected error",
