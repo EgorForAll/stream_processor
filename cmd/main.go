@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"log"
+	"net/http"
+	"time"
+
 	"stream_processor/internal/domain/dto"
 	"stream_processor/internal/domain/service"
 	"stream_processor/internal/infra/data/cache"
-	 repo "stream_processor/internal/infra/data/repositories"
-	"log"
+	repo "stream_processor/internal/infra/data/repositories"
 )
 
 type Processor interface {
@@ -22,15 +25,14 @@ func main() {
 		"replica-4": "db-replica-4.example.com:5432",
 	}
 
-	cache := cache.NewInMemory(replicas)
+	cache := cache.NewInMemory(&http.Client{Timeout: 10 * time.Second}, replicas)
 	repo := repo.NewRepo(cache)
 
 	processor := service.NewService(repo)
-	
+
 	// имитация работы сервиса
 	ctx := context.Background()
-	
-	
+
 	doc := &dto.Document{
 		Url:       "https://example.com",
 		PubDate:   123,
