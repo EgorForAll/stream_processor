@@ -150,7 +150,7 @@ func TestRepo_Get(t *testing.T) {
 			url:  "https://missing.com",
 			setupMock: func(m *mocks.MockCache) {
 				m.GetFn = func(ctx context.Context, url string) (*models.Document, error) {
-					return nil, errors.New("low-level cache error")
+					return nil, customerr.ErrDocumentNotFound
 				}
 			},
 			wantDoc: nil,
@@ -162,12 +162,12 @@ func TestRepo_Get(t *testing.T) {
 			url:  "https://example.com",
 			setupMock: func(m *mocks.MockCache) {
 				m.GetFn = func(ctx context.Context, url string) (*models.Document, error) {
-					return nil, nil
+					return nil, customerr.ErrDocumentNotFound
 				}
 			},
 			wantDoc:     nil,
 			wantErr:     true,
-			errContains: "cache returned nil document",
+			errContains: customerr.ErrDocumentNotFound.Error(),
 		},
 	}
 
