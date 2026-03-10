@@ -7,15 +7,17 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"stream_processor/internal/infra/data/models"
 	"sync"
 	"time"
+
+	"stream_processor/internal/infra/customerr"
+	"stream_processor/internal/infra/data/models"
 )
 
 const (
 	retries        = 3
 	retriesTimeout = 500 * time.Millisecond // ms
-	clientTimeout  = 8 * time.Second        //ms
+	clientTimeout  = 8 * time.Second        // ms
 )
 
 var ErrNoReplica = errors.New("no replica responded in time")
@@ -49,12 +51,12 @@ func (in *InMemory) QueryGet(ctx context.Context, url string) (*models.Document,
 		return nil, ErrNoReplica
 	}
 
-	saveCtx, cancel := context.WithTimeout(ctx, clientTimeout)
+	getCtx, cancel := context.WithTimeout(ctx, clientTimeout)
 	defer cancel()
 
 	treads := len(in.replicas)
 	resultCh := make(chan *models.Document)
-	errCh := make(chan ReqErr, treads)
+	errCh := make(chan error, treads)
 
 	var wg sync.WaitGroup
 	wg.Add(treads)
@@ -62,25 +64,14 @@ func (in *InMemory) QueryGet(ctx context.Context, url string) (*models.Document,
 	for addr := range in.replicas {
 		go func(addr string) {
 			defer wg.Done()
-			select {
-			case <-saveCtx.Done():
-				// контекст истек, shutdown
+			query := fmt.Sprintf("%s/%s", addr, url)
+			doc, err := in.doQueryWorker(getCtx, query)
+			if err != nil {
+				errCh <- err
 				return
-			default:
-				query := fmt.Sprintf("%s/%s", addr, url)
-				req, err := http.NewRequestWithContext(saveCtx, http.MethodGet, query, nil)
-				if err != nil {
-					errCh <- ReqErr{addr: query, err: fmt.Errorf("build req: %w", err)}
-					return
-				}
-				doc, err := in.doGetQueryWithRetries(saveCtx, req)
-				if err != nil {
-					errCh <- ReqErr{addr: query, err: err}
-					return
-				}
-				if doc != nil {
-					resultCh <- doc
-				}
+			}
+			if doc != nil {
+				resultCh <- doc
 			}
 		}(addr)
 	}
@@ -101,12 +92,14 @@ func (in *InMemory) QueryGet(ctx context.Context, url string) (*models.Document,
 				cancel()
 				return doc, nil
 			}
-		case reqErr, ok := <-errCh:
+		case e, ok := <-errCh:
 			if !ok {
 				errCh = nil
 			} else {
-				errs = append(errs, fmt.Errorf("query %s: %w", reqErr.addr, reqErr.err))
+				errs = append(errs, e)
 			}
+		case <-getCtx.Done():
+			return nil, customerr.ErrCtxExeeded
 		}
 	}
 
@@ -143,6 +136,25 @@ func (in *InMemory) QuerySet(ctx context.Context, doc *models.Document) error {
 	query := fmt.Sprintf("%s/%s", master, doc.Url)
 
 	return in.doSetQueryWithRetries(setCtx, query, body)
+}
+
+func (in *InMemory) doQueryWorker(ctx context.Context, query string) (*models.Document, error) {
+	select {
+	case <-ctx.Done():
+		// контекст истек, shutdown
+		return nil, nil
+	default:
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, query, nil)
+		if err != nil {
+			return nil, fmt.Errorf("query %s: build req error -> %w", query, err)
+		}
+		doc, err := in.doGetQueryWithRetries(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("query %s: error req with retries -> %w", query, err)
+		}
+		
+		return doc, nil
+	}
 }
 
 func (in *InMemory) doSetQueryWithRetries(ctx context.Context, query string, body []byte) error {
@@ -234,7 +246,6 @@ func (in *InMemory) doGetQueryWithRetries(ctx context.Context, req *http.Request
 }
 
 func (in *InMemory) formatResponse(resp *http.Response) (*models.Document, error) {
-
 	var doc *models.Document
 	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)

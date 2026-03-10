@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
-	"sync"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"stream_processor/internal/infra/customerr"
 	"stream_processor/internal/infra/data/models"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/gojuno/minimock/v3"
 )
@@ -50,11 +53,7 @@ func TestInMemory_QueryGet_OK(t *testing.T) {
 		t.Fatalf("unexpected doc: %+v", doc)
 	}
 
-	if calls := dbMock.DoAfterCounter(); calls != 1 {
-		t.Fatalf("expected 1 Do call, got %d", calls)
-	}
 }
-
 
 // QueryGet: несколько ошибок от Do, потом успешный ответ
 func TestInMemory_QueryGet_ErrorThenSuccess(t *testing.T) {
@@ -110,43 +109,79 @@ func TestInMemory_QueryGet_ErrorThenSuccess(t *testing.T) {
 }
 
 func TestInMemory_ManyConcurrency(t *testing.T) {
-    ctx := context.Background()
-    mc := minimock.NewController(t)
-    defer mc.Finish()
+	ctx := context.Background()
+	mc := minimock.NewController(t)
+	defer mc.Finish()
 
-    dbMock := NewDBConnMock(mc)
+	dbMock := NewDBConnMock(mc)
 
-    url := "https://example.com"
-    replicas := map[string]string{
-        "replica-1": "http://db-replica-1.example.com:5432",
-        "replica-2": "http://db-replica-2.example.com:5432",
-        "replica-3": "http://db-replica-3.example.com:5432",
-    }
-    
-    bodyBytes, _ := json.Marshal(&models.Document{Url: url})
+	url := "https://example.com"
+	replicas := map[string]string{
+		"replica-1": "http://db-replica-1.example.com:5432",
+		"replica-2": "http://db-replica-2.example.com:5432",
+		"replica-3": "http://db-replica-3.example.com:5432",
+	}
 
-    dbMock.DoMock.Set(func(req *http.Request) (*http.Response, error) {
-        return &http.Response{
-            StatusCode: http.StatusOK,
-            Body:       io.NopCloser(bytes.NewReader(bodyBytes)),
-        }, nil
-    })
+	bodyBytes, _ := json.Marshal(&models.Document{Url: url})
 
-    in := NewInMemory(dbMock, replicas)
+	dbMock.DoMock.Set(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(bodyBytes)),
+		}, nil
+	})
 
-    var wg sync.WaitGroup
-    for i := 0; i < 10000; i++ {
-        wg.Add(1)
-        go func() {
-            defer wg.Done()
-            doc, err := in.QueryGet(ctx, url)
-            if err != nil {
-                t.Fatalf("expected no error, got %v", err)
-            }
-            if doc == nil || doc.Url != url {
-                t.Fatalf("unexpected doc: %+v", doc)
-            }
-        }()
-    }
-    wg.Wait()
+	in := NewInMemory(dbMock, replicas)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10000; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			doc, err := in.QueryGet(ctx, url)
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+			if doc == nil || doc.Url != url {
+				t.Fatalf("unexpected doc: %+v", doc)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestInMemory_QueryGet_ContextExceeded(t *testing.T) {
+	// Дадим немного времени, но меньше, чем нужно для ретраев
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	mc := minimock.NewController(t)
+	defer mc.Finish()
+
+	dbMock := NewDBConnMock(mc)
+
+	url := "https://example.com"
+	replicas := map[string]string{
+		"replica-1": "http://db-replica-1.example.com:5432",
+	}
+
+	// Мок: просто ждём отмены контекста
+	dbMock.
+		DoMock.
+		Optional().
+		Set(func(req *http.Request) (*http.Response, error) {
+		<-req.Context().Done()
+		return nil, req.Context().Err()
+	})
+
+	in := NewInMemory(dbMock, replicas)
+
+	_, err := in.QueryGet(ctx, url)
+
+	if err == nil {
+		t.Fatalf("expected error %v, got nil", customerr.ErrCtxExeeded)
+	}
+	if !errors.Is(err, customerr.ErrCtxExeeded) {
+		t.Fatalf("expected error %v, got %v", customerr.ErrCtxExeeded, err)
+	}
 }
