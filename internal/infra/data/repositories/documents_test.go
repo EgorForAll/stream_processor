@@ -150,7 +150,7 @@ func TestRepo_Get(t *testing.T) {
 			url:  "https://missing.com",
 			setupMock: func(m *mocks.MockCache) {
 				m.GetFn = func(ctx context.Context, url string) (*models.Document, error) {
-					return nil, errors.New("low-level cache error")
+					return nil, customerr.ErrDocumentNotFound
 				}
 			},
 			wantDoc: nil,
