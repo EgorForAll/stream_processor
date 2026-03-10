@@ -14,7 +14,7 @@ import (
 	"github.com/gojuno/minimock/v3"
 )
 
-// Успешный QueryGet (200)
+// Успешный QueryGet
 func TestInMemory_QueryGet_OK(t *testing.T) {
 	ctx := context.Background()
 	mc := minimock.NewController(t)
@@ -25,6 +25,8 @@ func TestInMemory_QueryGet_OK(t *testing.T) {
 	url := "https://example.com"
 	replicas := map[string]string{
 		"replica-1": "http://db-replica-1.example.com:5432",
+		"replica-2": "http://db-replica-2.example.com:5432",
+		"replica-3": "http://db-replica-3.example.com:5432",
 	}
 
 	// тело успешного ответа
@@ -34,7 +36,6 @@ func TestInMemory_QueryGet_OK(t *testing.T) {
 		Body:       io.NopCloser(bytes.NewReader(body)),
 	}
 
-	// один вызов Do → 200
 	dbMock.DoMock.Set(func(req *http.Request) (*http.Response, error) {
 		return respOK, nil
 	})
@@ -55,7 +56,7 @@ func TestInMemory_QueryGet_OK(t *testing.T) {
 }
 
 
-// QueryGet: несколько ошибок от Do, потом успешный ответ (ретраи по ошибке)
+// QueryGet: несколько ошибок от Do, потом успешный ответ
 func TestInMemory_QueryGet_ErrorThenSuccess(t *testing.T) {
 	ctx := context.Background()
 	mc := minimock.NewController(t)
@@ -121,11 +122,9 @@ func TestInMemory_ManyConcurrency(t *testing.T) {
         "replica-2": "http://db-replica-2.example.com:5432",
         "replica-3": "http://db-replica-3.example.com:5432",
     }
-
-    // заранее сериализуем документ
+    
     bodyBytes, _ := json.Marshal(&models.Document{Url: url})
 
-    // каждый вызов Do возвращает НОВЫЙ http.Response с НОВЫМ Body
     dbMock.DoMock.Set(func(req *http.Request) (*http.Response, error) {
         return &http.Response{
             StatusCode: http.StatusOK,
@@ -136,7 +135,7 @@ func TestInMemory_ManyConcurrency(t *testing.T) {
     in := NewInMemory(dbMock, replicas)
 
     var wg sync.WaitGroup
-    for i := 0; i < 10; i++ {
+    for i := 0; i < 10000; i++ {
         wg.Add(1)
         go func() {
             defer wg.Done()

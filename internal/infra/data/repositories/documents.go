@@ -44,6 +44,7 @@ func (r *Repo) Get(ctx context.Context, url string) (*dto.Document, error) {
 	
 	docEntity, err := r.Cache.QueryGet(ctx, url)
 	if err != nil {
+		// обработать отдельно типы ошибок
 		return nil, customerr.ErrDocumentNotFound
 	}
 

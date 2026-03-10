@@ -3,12 +3,13 @@ package repositories
 import (
 	"context"
 	"errors"
+
 	"stream_processor/internal/domain/dto"
 	customerr "stream_processor/internal/infra/customerr"
 	"stream_processor/internal/infra/data/models"
 	"stream_processor/internal/infra/mocks"
 	"stream_processor/internal/infra/utils"
-	
+
 	"testing"
 )
 
